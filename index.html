@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synthesia Game Studio - Interactive Music EdTech</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.28/build/Midi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pitchy@4.0.1/dist/bundle.umd.js"></script>
+    <style>
+        body { background-color: #0d1117; color: #c9d1d9; overflow-x: hidden; font-family: system-ui, sans-serif; }
+        canvas { display: block; border-radius: 8px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.7); }
+        .piano-white { background: linear-gradient(to bottom, #fff 0%, #ebebeb 100%); }
+        .piano-black { background: linear-gradient(to bottom, #1f2937 0%, #111827 100%); }
+        .active-key-user { background: #34d399 !important; } /* Verde para acierto */
+        .active-key-midi { background: #60a5fa !important; } /* Azul para la guía MIDI */
+    </style>
+</head>
+<body class="p-4 md:p-8 flex flex-col h-screen justify-between">
+
+    <header class="bg-gray-900 border border-gray-800 p-4 rounded-xl shadow-2xl mb-4 grid grid-cols-1 lg:grid-cols-4 gap-4 items-center">
+        <div>
+            <h1 class="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400 tracking-wider">SYNTHESIA LAB</h1>
+            <p class="text-xs text-gray-400">Engineered by Cielo, Luan, Eithan & Jair</p>
+        </div>
+        
+        <div class="flex flex-wrap gap-2 items-center col-span-2">
+            <label class="bg-blue-600 hover:bg-blue-500 text-white text-xs px-4 py-2 rounded-lg font-bold cursor-pointer transition flex items-center gap-2">
+                📂 Cargar MIDI
+                <input type="file" id="midi-upload" accept=".mid,.midi" class="hidden">
+            </label>
+            <button id="btn-mic" class="bg-red-600 hover:bg-red-500 text-white text-xs px-4 py-2 rounded-lg font-bold transition flex items-center gap-2">
+                🎙️ Activar Mic
+            </button>
+            <button id="btn-play" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-4 py-2 rounded-lg font-bold transition hidden">
+                ▶️ Play
+            </button>
+            <label class="text-xs text-gray-300 flex items-center gap-1">
+                <input type="checkbox" id="chk-metronome" class="rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-0"> ⏱️ Metrónomo
+            </label>
+        </div>
+
+        <div class="flex gap-4 justify-end text-xs">
+            <div>
+                <label class="block text-gray-400 mb-1">Tolerancia (Cents): <span id="val-cents">30</span></label>
+                <input type="range" id="range-cents" min="10" max="100" value="30" class="w-24 accent-emerald-500">
+            </div>
+            <div>
+                <label class="block text-gray-400 mb-1">Velocidad Caída: <span id="val-zoom">1x</span></label>
+                <input type="range" id="range-zoom" min="50" max="250" value="100" class="w-24 accent-blue-500">
+            </div>
+        </div>
+    </header>
+
+    <section class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4 text-center">
+        <div class="bg-gray-900/60 p-3 rounded-xl border border-gray-800">
+            <div class="text-xs uppercase text-gray-400 tracking-widest font-bold">Puntaje</div>
+            <div id="hud-score" class="text-2xl font-black text-yellow-400">000000</div>
+        </div>
+        <div class="bg-gray-900/60 p-3 rounded-xl border border-gray-800">
+            <div class="text-xs uppercase text-gray-400 tracking-widest font-bold">Precisión</div>
+            <div id="hud-accuracy" class="text-2xl font-black text-emerald-400">100%</div>
+        </div>
+        <div class="bg-gray-900/60 p-3 rounded-xl border border-gray-800">
+            <div class="text-xs uppercase text-gray-400 tracking-widest font-bold">Combo Actual</div>
+            <div id="hud-combo" class="text-2xl font-black text-purple-400">0</div>
+        </div>
+        <div class="bg-gray-900/60 p-3 rounded-xl border border-gray-800">
+            <div class="text-xs uppercase text-gray-400 tracking-widest font-bold">Combo Máx</div>
+            <div id="hud-max-combo" class="text-2xl font-black text-indigo-400">0</div>
+        </div>
+        <div class="bg-gray-900/60 p-3 rounded-xl border border-gray-800 col-span-2 md:col-span-1 flex flex-col justify-center items-center">
+            <div id="hud-feedback" class="text-lg font-black text-gray-500 tracking-wider">READY</div>
+            <div id="tuner-indicator" class="text-xs mt-1 font-mono text-gray-400">-- Hz (-- cents)</div>
+        </div>
+    </section>
+
+    <main id="canvas-container" class="relative flex-grow w-full bg-black rounded-xl overflow-hidden min-h-[300px]">
+        </main>
+
+    <footer id="piano-container" class="relative w-full h-24 mt-4 bg-gray-950 rounded-xl flex select-none overflow-hidden border-t-4 border-gray-800">
+        </footer>
+
+    <script>
+        /**
+         * GLOBAL CONFIG & STATE MANAGEMENT
+         */
+        const CONFIG = {
+            START_MIDI_NOTE: 21,  // A0 (Piano estándar)
+            END_MIDI_NOTE: 108,   // C8
+            TOTAL_KEYS: 88,
+            PIANO_HEIGHT: 96,
+            TARGET_LINE_Y: 0,      
+            BASE_SPEED: 2,         
+        };
+
+        let STATE = {
+            isPlaying: false,
+            midiData: null,
+            audioContext: null,
+            pitchDetector: null,
+            currentBpm: 120,
+            score: 0,
+            combo: 0,
+            maxCombo: 0,
+            totalNotesSpawned: 0,
+            successfulNotes: 0,
+            toleranceCents: 30,
+            speedMultiplier: 1.0,
+            activeMidiNotes: new Set(),
+            currentDetectedNote: null,
+            metronomeEnabled: false,
+            startTime: 0,
+            notesToRender: []
+        };
+
+        const TRACK_COLORS = [0x60A5FA, 0x34D399, 0xF43F5E, 0xFBBF24, 0xA78BFA, 0x2DD4BF];
+
+        /**
+         * MODULO 1: INITIALIZER & UI BINDINGS
+         */
+        document.addEventListener("DOMContentLoaded", () => {
+            initGameEngine();
+            buildVirtualPiano();
+            setupEventListeners();
+        });
+
+        function setupEventListeners() {
+            document.getElementById('midi-upload').addEventListener('change', handleMidiUpload);
+            document.getElementById('btn-mic').addEventListener('click', initAudioEngine);
+            document.getElementById('btn-play').addEventListener('click', togglePlayback);
+            document.getElementById('range-cents').addEventListener('input', (e) => {
+                STATE.toleranceCents = parseInt(e.target.value);
+                document.getElementById('val-cents').innerText = STATE.toleranceCents;
+            });
+            document.getElementById('range-zoom').addEventListener('input', (e) => {
+                STATE.speedMultiplier = parseFloat(e.target.value) / 100;
+                document.getElementById('val-zoom').innerText = STATE.speedMultiplier.toFixed(1) + 'x';
+            });
+            document.getElementById('chk-metronome').addEventListener('change', (e) => {
+                STATE.metronomeEnabled = e.target.checked;
+            });
+
+            window.addEventListener('resize', () => {
+                if (window.pixiApp) {
+                    const container = document.getElementById('canvas-container');
+                    window.pixiApp.renderer.resize(container.clientWidth, container.clientHeight);
+                    CONFIG.TARGET_LINE_Y = container.clientHeight - 10;
+                }
+            });
+        }
+
+        /**
+         * MODULO 2: PIXIJS GRAPHICS ENGINE (Falling Notes)
+         */
+        function initGameEngine() {
+            const container = document.getElementById('canvas-container');
+            
+            const app = new PIXI.Application({
+                width: container.clientWidth,
+                height: container.clientHeight,
+                backgroundColor: 0x070a0f,
+                antialias: true,
+                resolution: window.devicePixelRatio || 1,
+                autoDensity: true
+            });
+            
+            container.appendChild(app.view);
+            window.pixiApp = app;
+            CONFIG.TARGET_LINE_Y = app.screen.height - 5;
+
+            const notesContainer = new PIXI.Container();
+            app.stage.addChild(notesContainer);
+            window.notesContainer = notesContainer;
+
+            const line = new PIXI.Graphics();
+            line.lineStyle(4, 0x3b82f6, 0.8);
+            line.moveTo(0, CONFIG.TARGET_LINE_Y - 2);
+            line.lineTo(app.screen.width, CONFIG.TARGET_LINE_Y - 2);
+            app.stage.addChild(line);
+
+            app.ticker.add((delta) => {
+                if (!STATE.isPlaying) return;
+
+                const elapsedTime = (performance.now() - STATE.startTime) / 1000;
+                renderFallingNotes(elapsedTime);
+                evaluateRealtimeMatch();
+            });
+        }
+
+        /**
+         * MODULO 3: VIRTUAL PIANO INTERFACE DOM
+         */
+        function buildVirtualPiano() {
+            const piano = document.getElementById('piano-container');
+            piano.innerHTML = '';
+            
+            const blackKeysPattern = [1, 3, 6, 8, 10]; 
+
+            for (let i = CONFIG.START_MIDI_NOTE; i <= CONFIG.END_MIDI_NOTE; i++) {
+                const noteInOctave = i % 12;
+                const isBlack = blackKeysPattern.includes(noteInOctave);
+                
+                const key = document.createElement('div');
+                key.id = `key-${i}`;
+                key.dataset.note = i;
+                
+                if (isBlack) {
+                    key.className = 'piano-black absolute z-10 bg-gray-900 border border-black rounded-b-md shadow-lg';
+                    const whiteKeyWidth = 100 / 52; 
+                    const whiteKeyIndex = getWhiteKeyCountBefore(i);
+                    key.style.width = `calc(${whiteKeyWidth}% * 0.65)`;
+                    key.style.left = `calc(${whiteKeyIndex * whiteKeyWidth}% - (${whiteKeyWidth}% * 0.35))`;
+                    key.style.height = '60%';
+                } else {
+                    key.className = 'piano-white flex-grow bg-white border-r border-gray-300 rounded-b-lg shadow transition-colors';
+                    key.style.height = '100%';
+                }
+                
+                piano.appendChild(key);
+            }
+        }
+
+        function getWhiteKeyCountBefore(note) {
+            let count = 0;
+            const blackKeysPattern = [1, 3, 6, 8, 10];
+            for (let i = CONFIG.START_MIDI_NOTE; i < note; i++) {
+                if (!blackKeysPattern.includes(i % 12)) count++;
+            }
+            return count;
+        }
+
+        /**
+         * MODULO 4: PARSER MIDI (@tonejs/midi)
+         */
+        async function handleMidiUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const midi = new Midi(event.target.result);
+                STATE.midiData = midi;
+                
+                STATE.currentBpm = midi.header.tempos[0]?.bpm || 120;
+                
+                STATE.notesToRender = [];
+                midi.tracks.forEach((track, trackIdx) => {
+                    const color = TRACK_COLORS[trackIdx % TRACK_COLORS.length];
+                    track.notes.forEach(note => {
+                        STATE.notesToRender.push({
+                            midi: note.midi,
+                            time: note.time,
+                            duration: note.duration,
+                            velocity: note.velocity,
+                            color: color,
+                            graphicObj: null,
+                            triggered: false,
+                            evaluated: false
+                        });
+                    });
+                });
+
+                STATE.notesToRender.sort((a, b) => a.time - b.time);
+                
+                document.getElementById('btn-play').classList.remove('hidden');
+                document.getElementById('hud-feedback').innerText = "MIDI READY";
+                document.getElementById('hud-feedback').className = "text-lg font-black text-blue-400";
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        /**
+         * MODULO 5: MOTOR DE RENDERIZADO DE NOTAS (PIXI)
+         */
+        function renderFallingNotes(elapsedTime) {
+            const width = window.pixiApp.screen.width;
+            const keyWidth = width / 52; 
+
+            window.notesContainer.removeChildren();
+            STATE.activeMidiNotes.clear();
+
+            STATE.notesToRender.forEach(note => {
+                const noteY = CONFIG.TARGET_LINE_Y - ((note.time - elapsedTime) * 150 * STATE.speedMultiplier);
+                const noteHeight = note.duration * 150 * STATE.speedMultiplier;
+
+                if (noteY + noteHeight > 0 && noteY - noteHeight < CONFIG.TARGET_LINE_Y * 2) {
+                    
+                    const isBlack = [1, 3, 6, 8, 10].includes(note.midi % 12);
+                    let noteX = 0;
+                    let currentNoteWidth = keyWidth;
+
+                    if (isBlack) {
+                        const whiteIndex = getWhiteKeyCountBefore(note.midi);
+                        noteX = (whiteIndex * keyWidth) - (keyWidth * 0.35);
+                        currentNoteWidth = keyWidth * 0.65;
+                    } else {
+                        const whiteIndex = getWhiteKeyCountBefore(note.midi);
+                        noteX = whiteIndex * keyWidth;
+                    }
+
+                    const rect = new PIXI.Graphics();
+                    rect.beginFill(note.color);
+                    rect.drawRoundedRect(noteX, noteY - noteHeight, currentNoteWidth - 2, noteHeight, 6);
+                    rect.endFill();
+                    
+                    window.notesContainer.addChild(rect);
+
+                    if (elapsedTime >= note.time && elapsedTime <= note.time + note.duration) {
+                        STATE.activeMidiNotes.add(note.midi);
+                        highlightPianoKey(note.midi, 'active-key-midi');
+                    } else {
+                        removePianoKeyHighlight(note.midi, 'active-key-midi');
+                    }
+                }
+            });
+        }
+
+        /**
+         * MODULO 6: PROCESAMIENTO DE AUDIO EN TIEMPO REAL (PITCH DETECTION - YIN CORREGIDO)
+         */
+        async function initAudioEngine() {
+            if (STATE.audioContext) return;
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                STATE.audioContext = new AudioContext();
+                
+                const analyser = STATE.audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                
+                const source = STATE.audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+
+                const bufferLength = analyser.frequencyBinCount;
+                const dataArray = new Float32Array(bufferLength);
+
+                // CORRECCIÓN ESPECÍFICA: Invocación del espacio de nombres UMD de Pitchy
+                if (window.pitchy && window.pitchy.PitchDetector) {
+                    STATE.pitchDetector = window.pitchy.PitchDetector.forFloat32Array(analyser.fftSize);
+                } else {
+                    throw new ReferenceError("El objeto global 'pitchy' no pudo ser estructurado desde la CDN.");
+                }
+
+                document.getElementById('btn-mic').className = "bg-emerald-600 text-white text-xs px-4 py-2 rounded-lg font-bold transition";
+                document.getElementById('btn-mic').innerText = "🎙️ Mic Activo";
+
+                function detectPitch() {
+                    analyser.getFloatTimeDomainData(dataArray);
+                    const [pitch, clarity] = STATE.pitchDetector.findPitch(dataArray, STATE.audioContext.sampleRate);
+
+                    if (clarity > 0.85 && pitch > 50 && pitch < 2000) {
+                        const midiNoteRaw = 12 * Math.log2(pitch / 440) + 69;
+                        const roundedMidi = Math.round(midiNoteRaw);
+                        const centsError = Math.round((midiNoteRaw - roundedMidi) * 100);
+
+                        STATE.currentDetectedNote = roundedMidi;
+
+                        const tunerHud = document.getElementById('tuner-indicator');
+                        tunerHud.innerText = `${pitch.toFixed(1)} Hz (${centsError > 0 ? '+' : ''}${centsError} cents)`;
+                        
+                        if (Math.abs(centsError) <= STATE.toleranceCents) {
+                            tunerHud.className = "text-xs mt-1 font-mono text-emerald-400 font-bold";
+                        } else {
+                            tunerHud.className = "text-xs mt-1 font-mono text-amber-500";
+                        }
+
+                        highlightPianoKey(roundedMidi, 'active-key-user');
+                    } else {
+                        STATE.currentDetectedNote = null;
+                        document.getElementById('tuner-indicator').innerText = "-- Hz (-- cents)";
+                        document.getElementById('tuner-indicator').className = "text-xs mt-1 font-mono text-gray-400";
+                        clearAllUserHighlights();
+                    }
+
+                    if (STATE.audioContext) requestAnimationFrame(detectPitch);
+                }
+
+                detectPitch();
+
+            } catch (err) {
+                console.error("Error accediendo al micrófono: ", err);
+                alert("No se pudo inicializar la API de Audio de forma local segura. Despliega a GitHub Pages para activar HTTPS.");
+            }
+        }
+
+        /**
+         * MODULO 7: CORE GAMEPLAY MECHANICS (Gamification Engine)
+         */
+        function evaluateRealtimeMatch() {
+            if (STATE.activeMidiNotes.size === 0) return;
+
+            const feedbackHud = document.getElementById('hud-feedback');
+
+            if (STATE.currentDetectedNote && STATE.activeMidiNotes.has(STATE.currentDetectedNote)) {
+                STATE.combo++;
+                if (STATE.combo > STATE.maxCombo) STATE.maxCombo = STATE.combo;
+                
+                STATE.score += 100 + (STATE.combo * 5);
+                STATE.successfulNotes++;
+
+                feedbackHud.innerText = "PERFECT";
+                feedbackHud.className = "text-lg font-black text-emerald-400 tracking-wider";
+            } else {
+                if (STATE.currentDetectedNote !== null) {
+                    STATE.combo = 0;
+                    feedbackHud.innerText = "MISS";
+                    feedbackHud.className = "text-lg font-black text-red-500 tracking-wider";
+                }
+            }
+
+            STATE.totalNotesSpawned++;
+            updateScoreboard();
+        }
+
+        function updateScoreboard() {
+            document.getElementById('hud-score').innerText = String(STATE.score).padStart(6, '0');
+            document.getElementById('hud-combo').innerText = STATE.combo;
+            document.getElementById('hud-max-combo').innerText = STATE.maxCombo;
+            
+            const accuracy = STATE.totalNotesSpawned > 0 ? (STATE.successfulNotes / STATE.totalNotesSpawned) * 100 : 100;
+            document.getElementById('hud-accuracy').innerText = accuracy.toFixed(1) + '%';
+        }
+
+        /**
+         * MODULO 8: UTILITIES & VISUAL FEEDBACK CONTROL
+         */
+        function togglePlayback() {
+            if (!STATE.midiData) return;
+
+            if (STATE.isPlaying) {
+                STATE.isPlaying = false;
+                document.getElementById('btn-play').innerText = "▶️ Play";
+            } else {
+                STATE.isPlaying = true;
+                STATE.startTime = performance.now();
+                document.getElementById('btn-play').innerText = "⏸️ Pause";
+                if(STATE.metronomeEnabled) startMetronomeEngine();
+            }
+        }
+
+        function startMetronomeEngine() {
+            if (!STATE.isPlaying || !STATE.metronomeEnabled) return;
+            const interval = 60000 / STATE.currentBpm;
+            
+            if(STATE.audioContext) {
+                const osc = STATE.audioContext.createOscillator();
+                const gain = STATE.audioContext.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1000, STATE.audioContext.currentTime);
+                gain.gain.setValueAtTime(0.1, STATE.audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, STATE.audioContext.currentTime + 0.05);
+                osc.connect(gain);
+                gain.connect(STATE.audioContext.destination);
+                osc.start();
+                osc.stop(STATE.audioContext.currentTime + 0.06);
+            }
+            
+            setTimeout(startMetronomeEngine, interval);
+        }
+
+        function highlightPianoKey(noteId, cssClass) {
+            const key = document.getElementById(`key-${noteId}`);
+            if (key) key.classList.add(cssClass);
+        }
+
+        function removePianoKeyHighlight(noteId, cssClass) {
+            const key = document.getElementById(`key-${noteId}`);
+            if (key) key.classList.remove(cssClass);
+        }
+
+        function clearAllUserHighlights() {
+            for (let i = CONFIG.START_MIDI_NOTE; i <= CONFIG.END_MIDI_NOTE; i++) {
+                removePianoKeyHighlight(i, 'active-key-user');
+            }
+        }
+    </script>
+</body>
+</html>
